@@ -13,6 +13,23 @@ once, each with its own size.
 waves inside the red are the damage. Switched to black, the edge becomes a
 straight border. See the [tutorial](docs/tutorial.md).*
 
+### Before and after
+
+The bottom-right corner of the same screen, on a white page:
+
+![Before: dark waves along the bottom edge](docs/images/edge-before.jpg)
+
+![After: a straight black border](docs/images/edge-after.jpg)
+
+*Top: no mask, the delamination eats into the picture. Bottom: a 20 px black
+mask on the bottom edge.*
+
+### Any edge, any size
+
+![Masks on all four edges, in red](docs/images/four-edges-red.jpg)
+
+*Four masks in red: 40 px on the bottom, 24 px on the other three edges.*
+
 - Several masks: `top`, `bottom`, `left`, `right`, full edge or a segment
 - Sizes in panel pixels
 - Red preview to place a mask over the damage before it turns black

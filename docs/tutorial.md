@@ -128,7 +128,11 @@ screenmask status
 ```
 
 Look at the bright image again. The edge should now look like a straight black
-border instead of a wavy one. On an OLED, black pixels are off, so the mask
+border instead of a wavy one:
+
+![Before: dark waves along the bottom edge](images/edge-before.jpg)
+
+![After: a straight black border](images/edge-after.jpg) On an OLED, black pixels are off, so the mask
 adds no wear to the panel.
 
 ## 6. Check again later
