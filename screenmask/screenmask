@@ -1,0 +1,225 @@
+#!/bin/sh
+# screenmask — configure webos-screenmask on the TV.
+#
+# Every change gets a new revision. The command waits until the masks on screen
+# report that revision in the ACK file. Without that confirmation it restores
+# the previous config and fails, so the config always matches the screen.
+set -eu
+STATE_DIR=${SCREENMASK_STATE_DIR:-@STATE_DIR@}
+CONF=$STATE_DIR/masks.conf
+ACK=${SCREENMASK_ACK:-/tmp/screenmask-ack.json}
+TIMEOUT=${SCREENMASK_ACK_TIMEOUT:-8}
+MAX_AGE=5
+# Candidates live next to the config: a rename across filesystems is not atomic.
+trap 'rm -f "$CONF.new" "$CONF.new.kv" "$CONF.new.set" "$CONF.new.rm"' EXIT
+
+usage() {
+    cat <<'EOF'
+usage: screenmask <command>
+
+  status                          show state and masks
+  add <edge> <size> [start len]   add a mask; prints its id
+  set <id> key=value...           change a mask (edge, size, start, length, color)
+  remove <id>                     delete a mask
+  on | off                        show or hide all masks
+  preview [seconds]               paint all masks red (default 15 s, max 300)
+  panel <width>x<height>          override the detected panel resolution
+
+  edge    top | bottom | left | right
+  size    thickness in panel pixels (1-1000)
+  start   offset along the edge in panel pixels (default 0)
+  len     length along the edge in panel pixels; 0 = to the end (default 0)
+  color   #RRGGBB (default #000000)
+
+The UI runs at 1920x1080 on a 4K panel, so sizes round up to 2 panel pixels.
+EOF
+}
+
+die() { echo "screenmask: $*" >&2; exit 1; }
+is_uint() { case $1 in '' | *[!0-9]*) return 1 ;; esac; }
+
+check_edge() {
+    case $1 in top | bottom | left | right) ;; *) die "edge must be top, bottom, left or right: $1" ;; esac
+}
+check_size() {
+    is_uint "$1" && [ "$1" -ge 1 ] && [ "$1" -le 1000 ] || die "size must be 1-1000: $1"
+}
+check_offset() {
+    is_uint "$2" && [ "$2" -le 8000 ] || die "$1 must be 0-8000: $2"
+}
+check_color() {
+    printf '%s\n' "$1" | grep -Eq '^#[0-9A-Fa-f]{6}$' || die "color must be #RRGGBB: $1"
+}
+
+new_revision() {
+    rev=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+    rev=$(printf '%s' "$rev" | tr -d '-')
+    [ -n "$rev" ] || rev="$(date +%s)$$"
+    printf '%s\n' "$rev"
+}
+
+ack_fresh() {
+    [ -f "$ACK" ] || return 1
+    age=$(( $(date +%s) - $(stat -c %Y "$ACK") ))
+    [ "$age" -ge 0 ] && [ "$age" -le "$MAX_AGE" ] && grep -q '"app":"org.fabs.screenmask"' "$ACK"
+}
+ack_field() { sed -n 's/.*"'"$1"'":"\{0,1\}\([^",}]*\)"\{0,1\}[,}].*/\1/p' "$ACK" 2>/dev/null | head -n 1; }
+conf_get() { sed -n "s/^$1=//p" "$CONF" | head -n 1; }
+
+require_attached() {
+    [ -f "$CONF" ] || die "no config at $CONF; run install.sh first"
+    ack_fresh || die "masks are not attached to the compositor; check: systemctl status screenmask"
+}
+
+# set_kv <file> <key> <value>: replace or append a key=value line.
+set_kv() {
+    awk -v k="$2" -v v="$3" '
+        index($0, k "=") == 1 { print k "=" v; done = 1; next }
+        { print }
+        END { if (!done) print k "=" v }' "$1" >"$1.kv"
+    mv "$1.kv" "$1"
+}
+
+has_mask() { awk -v id="$2" '$1 == "mask" && $2 == id { found = 1 } END { exit !found }' "$1"; }
+
+# commit <candidate>: install the candidate with a new revision and wait for the ACK.
+commit() {
+    rev=$(new_revision)
+    set_kv "$1" revision "$rev"
+    cp "$CONF" "$CONF.prev"
+    mv "$1" "$CONF"
+    i=0
+    while [ "$i" -lt "$TIMEOUT" ]; do
+        sleep 1
+        if ack_fresh && [ "$(ack_field revision)" = "$rev" ]; then
+            rm -f "$CONF.prev"
+            return 0
+        fi
+        i=$((i + 1))
+    done
+    mv "$CONF.prev" "$CONF"
+    die "the compositor did not confirm the change in ${TIMEOUT}s; previous config restored"
+}
+
+candidate() {
+    cp "$CONF" "$CONF.new"
+    echo "$CONF.new"
+}
+
+cmd_status() {
+    [ -f "$CONF" ] || die "no config at $CONF; run install.sh first"
+    if ack_fresh; then
+        attached=yes
+        if [ "$(ack_field revision)" = "$(conf_get revision)" ]; then applied=yes; else applied=no; fi
+    else
+        attached=no
+        applied=no
+    fi
+    enabled=$(conf_get enabled)
+    echo "enabled:  $([ "$enabled" = 1 ] && echo yes || echo no)"
+    echo "attached: $attached"
+    echo "applied:  $applied"
+    echo "panel:    $(conf_get panel)"
+    [ "$attached" = yes ] && echo "screen:   $(ack_field width)x$(ack_field height) (compositor pixels)"
+    awk '
+        BEGIN { n = 0 }
+        $1 == "mask" { if (!n) printf "%-8s %-7s %6s %6s %6s  %s\n", "id", "edge", "size", "start", "length", "color"
+                       printf "%-8s %-7s %6s %6s %6s  %s\n", $2, $3, $4, $5, ($6 == 0 ? "full" : $6), $7; n++ }
+        END { if (!n) print "no masks; add one with: screenmask add bottom 20" }' "$CONF"
+}
+
+cmd_add() {
+    [ $# -eq 2 ] || [ $# -eq 4 ] || die "usage: screenmask add <edge> <size> [start length]"
+    check_edge "$1"
+    check_size "$2"
+    start=${3:-0}
+    length=${4:-0}
+    check_offset start "$start"
+    check_offset length "$length"
+    require_attached
+    id=$(awk '$1 == "mask" && $2 ~ /^m[0-9]+$/ { n = substr($2, 2) + 0; if (n > max) max = n }
+              END { print "m" (max + 1) }' "$CONF")
+    file=$(candidate)
+    echo "mask $id $1 $2 $start $length #000000" >>"$file"
+    commit "$file"
+    echo "$id"
+}
+
+cmd_set() {
+    [ $# -ge 2 ] || die "usage: screenmask set <id> key=value..."
+    id=$1
+    shift
+    require_attached
+    has_mask "$CONF" "$id" || die "no mask with id $id"
+    file=$(candidate)
+    for pair in "$@"; do
+        key=${pair%%=*}
+        value=${pair#*=}
+        [ "$key" != "$pair" ] || die "expected key=value: $pair"
+        case $key in
+            edge) check_edge "$value"; field=3 ;;
+            size) check_size "$value"; field=4 ;;
+            start) check_offset start "$value"; field=5 ;;
+            length) check_offset length "$value"; field=6 ;;
+            color) check_color "$value"; field=7 ;;
+            *) die "unknown key: $key (edge, size, start, length, color)" ;;
+        esac
+        awk -v id="$id" -v f="$field" -v v="$value" \
+            '$1 == "mask" && $2 == id { $f = v } { print }' "$file" >"$file.set"
+        mv "$file.set" "$file"
+    done
+    commit "$file"
+}
+
+cmd_remove() {
+    [ $# -eq 1 ] || die "usage: screenmask remove <id>"
+    require_attached
+    has_mask "$CONF" "$1" || die "no mask with id $1"
+    file=$(candidate)
+    awk -v id="$1" '!($1 == "mask" && $2 == id)' "$file" >"$file.rm"
+    mv "$file.rm" "$file"
+    commit "$file"
+}
+
+cmd_enable() {
+    require_attached
+    file=$(candidate)
+    set_kv "$file" enabled "$1"
+    commit "$file"
+}
+
+cmd_preview() {
+    seconds=${1:-15}
+    is_uint "$seconds" && [ "$seconds" -ge 1 ] && [ "$seconds" -le 300 ] || die "seconds must be 1-300: $seconds"
+    require_attached
+    file=$(candidate)
+    # The masks compare this with their own clock, so preview ends even if this command dies.
+    set_kv "$file" preview_until $(( $(date +%s) + seconds ))
+    commit "$file"
+    echo "masks shown in red for ${seconds}s"
+}
+
+cmd_panel() {
+    [ $# -eq 1 ] || die "usage: screenmask panel <width>x<height>"
+    printf '%s\n' "$1" | grep -Eq '^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$' || die "panel must look like 3840x2160: $1"
+    require_attached
+    file=$(candidate)
+    set_kv "$file" panel "$1"
+    commit "$file"
+}
+
+[ $# -ge 1 ] || { usage; exit 1; }
+command=$1
+shift
+case $command in
+    status) cmd_status ;;
+    add) cmd_add "$@" ;;
+    set) cmd_set "$@" ;;
+    remove | rm) cmd_remove "$@" ;;
+    on) cmd_enable 1 ;;
+    off) cmd_enable 0 ;;
+    preview) cmd_preview "$@" ;;
+    panel) cmd_panel "$@" ;;
+    -h | --help | help) usage ;;
+    *) usage >&2; exit 1 ;;
+esac

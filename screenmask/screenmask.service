@@ -1,0 +1,10 @@
+[Unit]
+Description=webos-screenmask loader (attaches masks to the running compositor)
+After=surface-manager-daemon.service
+
+[Service]
+Type=simple
+Environment=SCREENMASK_PREFIX=@PREFIX@
+ExecStart=/bin/sh @PREFIX@/loader.sh
+Restart=on-failure
+RestartSec=5
