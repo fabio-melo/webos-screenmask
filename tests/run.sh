@@ -38,6 +38,7 @@ exec sh -c "$3"
 EOF
 chmod +x "$FAKEBIN/luna-send" "$FAKEBIN/script"
 echo test >"$STATE/BUILD"
+cp "$SRC/tty-run" "$STATE/tty-run"
 
 reset_conf() {
     cat >"$STATE/masks.conf" <<'EOF'
@@ -183,6 +184,69 @@ if command -v node >/dev/null 2>&1; then
 else
     echo "skip QML parser and geometry (node not found)"
 fi
+
+# ---- tty-run ---------------------------------------------------------------
+# Prints whether stdin is a terminal, and its arguments.
+cat >"$T/probe" <<'EOF'
+#!/bin/sh
+if [ -t 0 ]; then printf 'tty'; else printf 'notty'; fi
+printf ' [%s]' "$@"
+EOF
+chmod +x "$T/probe"
+NOSCRIPT=$T/noscript
+mkdir -p "$NOSCRIPT"
+for tool in sh sed printf cat busybox; do command -v "$tool" >/dev/null && ln -sf "$(command -v "$tool")" "$NOSCRIPT/$tool"; done
+contains "tty-run passes arguments intact through script" \
+    "$(PATH=$FAKEBIN:$PATH $TEST_SH "$SRC/tty-run" "$T/probe" "a b" "it's" '{"k":"v"}' </dev/null)" \
+    "[a b] [it's] [{\"k\":\"v\"}]"
+if command -v python3 >/dev/null 2>&1; then
+    ln -sf "$(command -v python3)" "$NOSCRIPT/python3"
+    check "tty-run without script gives a terminal through python" \
+        "$(PATH=$NOSCRIPT $TEST_SH "$SRC/tty-run" "$T/probe" "a b" </dev/null | tr -d '\r')" "tty [a b]"
+    rm -f "$NOSCRIPT/python3"
+fi
+check "tty-run with neither runs the command as is" \
+    "$(PATH=$NOSCRIPT $TEST_SH "$SRC/tty-run" "$T/probe" x </dev/null)" "notty [x]"
+
+# ---- service.sh without systemd ----------------------------------------------
+SVC=$T/svc
+mkdir -p "$SVC"
+cp "$SRC/service.sh" "$SRC/supervise.sh" "$SVC/"
+# A loader that counts its starts and runs until killed.
+printf '#!/bin/sh\necho $$ >>"%s/starts"\nexec sleep 300\n' "$SVC" >"$SVC/loader.sh"
+svc() { SCREENMASK_SYSTEMD=no SCREENMASK_PREFIX=$SVC SCREENMASK_PIDFILE=$SVC/pid $TEST_SH "$SVC/service.sh" "$@"; }
+starts() { if [ -f "$SVC/starts" ]; then wc -l <"$SVC/starts" | tr -d ' '; else echo 0; fi; }
+wait_starts() { i=0; while [ "$(starts)" -lt "$1" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done; starts; }
+svc start
+check "fallback start runs the loader" "$(wait_starts 1)" 1
+svc start
+sleep 0.5
+check "fallback start twice keeps one supervisor" "$(starts)" 1
+contains "fallback status" "$(svc status)" "supervisor running"
+kill "$(tail -n 1 "$SVC/starts")"
+check "supervisor restarts a loader that exits" "$(wait_starts 2)" 2
+supervisor=$(cat "$SVC/pid")
+loader=$(tail -n 1 "$SVC/starts")
+svc stop
+check "fallback stop ends the supervisor" "$(kill -0 "$supervisor" 2>/dev/null && echo alive || echo gone)" gone
+sleep 0.3
+check "fallback stop ends the loader" "$(kill -0 "$loader" 2>/dev/null && echo alive || echo gone)" gone
+svc status >/dev/null
+check "fallback status after stop" "$?" 3
+
+# ---- service.sh with systemd -------------------------------------------------
+SYSCALLS=$T/systemctl-calls
+printf '#!/bin/sh\necho "$*" >>"%s"\n' "$SYSCALLS" >"$FAKEBIN/systemctl"
+chmod +x "$FAKEBIN/systemctl"
+echo unit >"$SVC/screenmask.service"
+PATH=$FAKEBIN:$PATH SCREENMASK_SYSTEMD=yes SCREENMASK_PREFIX=$SVC SCREENMASK_UNIT_DIR=$T/units \
+    $TEST_SH "$SVC/service.sh" start
+check "systemd start copies the unit" "$(cat "$T/units/screenmask.service" 2>/dev/null)" unit
+contains "systemd start does not block" "$(cat "$SYSCALLS")" "start --no-block screenmask.service"
+PATH=$FAKEBIN:$PATH SCREENMASK_SYSTEMD=yes SCREENMASK_PREFIX=$SVC SCREENMASK_UNIT_DIR=$T/units \
+    SCREENMASK_PIDFILE=$SVC/pid $TEST_SH "$SVC/service.sh" stop
+contains "systemd stop" "$(cat "$SYSCALLS")" "stop screenmask.service"
+check "systemd stop removes the unit" "$([ -e "$T/units/screenmask.service" ] && echo left || echo gone)" gone
 
 echo
 echo "$PASS passed, $FAIL failed"

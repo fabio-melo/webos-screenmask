@@ -1,0 +1,36 @@
+#!/bin/sh
+# tty-run <command> [args...]: run a command with a terminal on stdin.
+#
+# luna-send prints nothing when stdin is not a terminal. script(1) gives it one
+# on webOS 6. Older webOS may lack script, so Python opens a pty instead. With
+# neither, the command runs as is: the call still takes effect, only its
+# output may be empty.
+if command -v script >/dev/null 2>&1; then
+    cmd=
+    for arg in "$@"; do
+        cmd="$cmd '$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")'"
+    done
+    exec script -q -c "$cmd" /dev/null
+fi
+python=$(command -v python || command -v python3 || true)
+if [ -n "$python" ]; then
+    exec "$python" -c '
+import os, subprocess, sys
+master, slave = os.openpty()
+proc = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+os.close(slave)
+out = b""
+while True:
+    try:
+        data = os.read(master, 4096)
+    except OSError:          # EIO once the child closes the pty
+        break
+    if not data:
+        break
+    out += data
+proc.wait()
+getattr(sys.stdout, "buffer", sys.stdout).write(out)
+sys.exit(proc.returncode)
+' "$@"
+fi
+exec "$@"

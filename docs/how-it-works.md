@@ -10,14 +10,26 @@ service loads them at runtime, so nothing restarts and nothing flickers.
 boot
  └─ webosbrew run-parts
      └─ /var/lib/webosbrew/init.d/01-screenmask      (returns at once)
-         └─ screenmask.service → loader.sh           (systemd unit, lives on)
-             └─ luna: systemUIManager/launch Attach.qml
-                 └─ compositor (surface-manager)
-                     └─ Attach.qml: hidden helper, no focus
-                         └─ Masks.qml on the compositor root, above Views
-                             ├─ reads  /var/lib/screenmask/masks.conf  (every 1 s)
-                             └─ writes /tmp/screenmask-ack.json        (every 1 s)
+         └─ service.sh start                         (returns at once)
+             └─ screenmask.service → loader.sh       (systemd unit, lives on)
+                 └─ luna: systemUIManager/launch Attach.qml
+                     └─ compositor (surface-manager)
+                         └─ Attach.qml: hidden helper, no focus
+                             └─ Masks.qml on the compositor root, above Views
+                                 ├─ reads  /var/lib/screenmask/masks.conf  (every 1 s)
+                                 └─ writes /tmp/screenmask-ack.json        (every 1 s)
 ```
+
+### Without systemd
+
+Older webOS versions have no systemd. There, `service.sh` starts
+`supervise.sh` in the background instead of the unit. The supervisor runs
+`loader.sh` and starts it again 5 s after it exits, like `Restart=on-failure`.
+Its PID is in `/tmp/screenmask-supervisor.pid`. `setsid` detaches it from the
+boot hook and from an SSH session.
+
+This path passed on the C1 with systemd turned off by force. It has not run on
+a TV without systemd yet.
 
 ## Files on the TV
 
@@ -26,7 +38,8 @@ boot
 | `/var/lib/screenmask/` | Code and config. Persistent. |
 | `/var/lib/screenmask/masks.conf` | The masks. The only file you change, through `screenmask`. |
 | `/var/lib/webosbrew/init.d/01-screenmask` | Symlink to `boot-hook.sh` |
-| `/run/systemd/system/screenmask.service` | The loader unit, copied on every boot |
+| `/run/systemd/system/screenmask.service` | The loader unit, copied on every boot (systemd only) |
+| `/tmp/screenmask-supervisor.pid` | The supervisor PID (no systemd only) |
 | `/tmp/screenmask-ack.json` | Heartbeat written by the masks |
 | `/home/root/.local/bin/screenmask` | Symlink to the CLI, on root's `PATH` |
 

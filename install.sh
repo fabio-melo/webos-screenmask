@@ -17,24 +17,34 @@ TESTED='Rockhopper release 6.4.0'
 die() { echo "install: $*" >&2; exit 1; }
 warn() { echo "install: warning: $*" >&2; }
 
-# luna-send prints nothing without a terminal on stdin; script(1) gives it one.
+# luna-send prints nothing without a terminal on stdin; tty-run gives it one.
 luna() {
-    script -q -c "luna-send -n 1 -w 3000 $1 '$2'" /dev/null 2>/dev/null || true
+    sh "$HERE/screenmask/tty-run" luna-send -n 1 -w 3000 "$1" "$2" 2>/dev/null || true
 }
 
 detect_panel() {
     case $(luna luna://com.webos.service.tv.systemproperty/getSystemInfo '{"keys":["UHD"]}') in
         *'"UHD":"true"'*) echo 3840x2160 ;;
-        *) echo 1920x1080 ;;
+        *'"UHD":"false"'*) echo 1920x1080 ;;
+        *)
+            warn "could not detect the panel resolution; assuming 3840x2160. Change it with: screenmask panel <width>x<height>"
+            echo 3840x2160
+            ;;
     esac
 }
 
 # ---- preflight -------------------------------------------------------------
 [ "$(id -u)" = 0 ] || die "run as root on the TV"
 [ -d "$INITD" ] || die "$INITD not found. Root the TV first (RootMyTV or Homebrew Channel root)."
-for tool in luna-send script systemctl awk sed stat md5sum; do
+for tool in luna-send awk sed stat md5sum; do
     command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
 done
+if ! command -v systemctl >/dev/null 2>&1; then
+    warn "no systemd on this TV: the loader runs under a background supervisor instead (not validated on this webOS)"
+fi
+if ! command -v script >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    warn "neither script nor python found: luna-send runs without a terminal and may print nothing"
+fi
 [ -f "$HERE/screenmask/Masks.qml" ] || die "run this script from the unpacked repository"
 release=$(cat /etc/starfish-release 2>/dev/null || echo unknown)
 case $release in
@@ -45,9 +55,11 @@ esac
 
 # ---- files -----------------------------------------------------------------
 build=$(cat "$HERE"/screenmask/* | md5sum | cut -c1-12)
-systemctl stop screenmask.service 2>/dev/null || true
+[ ! -f "$PREFIX/service.sh" ] || sh "$PREFIX/service.sh" stop
+systemctl stop screenmask.service 2>/dev/null || true    # versions before service.sh
 mkdir -p "$PREFIX"
-for file in Attach.qml Masks.qml loader.sh boot-hook.sh screenmask.service screenmask; do
+for file in Attach.qml Masks.qml loader.sh boot-hook.sh screenmask.service screenmask \
+    service.sh supervise.sh tty-run; do
     sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@STATE_DIR@|$PREFIX|g" \
         -e "s|@ACK@|$ACK|g" -e "s|@BUILD@|$build|g" \
         "$HERE/screenmask/$file" >"$PREFIX/$file.new"
@@ -56,7 +68,8 @@ done
 # /tmp is volatile: keep the uninstaller next to the files it removes.
 cp "$HERE/uninstall.sh" "$PREFIX/uninstall.sh.new"
 mv "$PREFIX/uninstall.sh.new" "$PREFIX/uninstall.sh"
-chmod +x "$PREFIX/loader.sh" "$PREFIX/boot-hook.sh" "$PREFIX/screenmask" "$PREFIX/uninstall.sh"
+chmod +x "$PREFIX/loader.sh" "$PREFIX/boot-hook.sh" "$PREFIX/screenmask" "$PREFIX/uninstall.sh" \
+    "$PREFIX/service.sh" "$PREFIX/supervise.sh" "$PREFIX/tty-run"
 echo "$build" >"$PREFIX/BUILD"
 
 if [ ! -f "$PREFIX/masks.conf" ]; then
@@ -90,4 +103,4 @@ while [ "$i" -lt 20 ]; do
     sleep 1
     i=$((i + 1))
 done
-die "files installed, but the masks did not attach in 20s. Check: systemctl status screenmask"
+die "files installed, but the masks did not attach in 20s. Check: sh $PREFIX/service.sh status"

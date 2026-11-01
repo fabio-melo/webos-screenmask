@@ -15,9 +15,13 @@ BIN_DIR=${SCREENMASK_BIN_DIR:-/home/root/.local/bin}
 if [ -x "$PREFIX/screenmask" ]; then
     "$PREFIX/screenmask" off || echo "uninstall: could not confirm 'off'; continuing" >&2
 fi
-systemctl stop screenmask.service 2>/dev/null || true
-rm -f /run/systemd/system/screenmask.service
-systemctl daemon-reload 2>/dev/null || true
+if [ -f "$PREFIX/service.sh" ]; then
+    sh "$PREFIX/service.sh" stop
+else                                    # versions before service.sh
+    systemctl stop screenmask.service 2>/dev/null || true
+    rm -f /run/systemd/system/screenmask.service
+    systemctl daemon-reload 2>/dev/null || true
+fi
 rm -f "$INITD/01-screenmask" "$BIN_DIR/screenmask" /tmp/screenmask-ack.json
 rm -rf "$PREFIX"
 echo "uninstall: removed. Reboot to drop the hidden masks from compositor memory."

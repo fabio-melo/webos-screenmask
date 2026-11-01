@@ -1,5 +1,6 @@
 #!/bin/sh
-# webos-screenmask loader. Runs as the screenmask systemd unit.
+# webos-screenmask loader. Runs as the screenmask systemd unit, or under
+# supervise.sh on webOS without systemd.
 #
 # Attaches Attach.qml to the running compositor and attaches it again when the
 # heartbeat stops, for example when the system replaces the compositor. It
@@ -30,9 +31,8 @@ healthy() {
 attach() {
     app_id="org.fabs.screenmask.attach.$(cat "$PREFIX/BUILD")"
     payload='{"appId":"'"$app_id"'","main":"file://'"$PREFIX"'/Attach.qml","windowType":"_WEBOS_SYSTEM_UI_TYPE_OVERLAY","defaultWindowType":"overlay"}'
-    # luna-send prints nothing without a terminal on stdin; script(1) gives it one.
-    script -q -c "luna-send -n 1 -w 3000 luna://com.webos.service.systemUIManager/launch '$payload'" \
-        /dev/null >/dev/null 2>&1 || true
+    sh "$PREFIX/tty-run" luna-send -n 1 -w 3000 \
+        luna://com.webos.service.systemUIManager/launch "$payload" >/dev/null 2>&1 || true
 }
 
 while :; do

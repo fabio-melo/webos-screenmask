@@ -68,7 +68,7 @@ conf_get() { sed -n "s/^$1=//p" "$CONF" | head -n 1; }
 
 require_attached() {
     [ -f "$CONF" ] || die "no config at $CONF; run install.sh first"
-    ack_fresh || die "masks are not attached to the compositor; check: systemctl status screenmask"
+    ack_fresh || die "masks are not attached to the compositor; check: sh $STATE_DIR/service.sh status"
 }
 
 # set_kv <file> <key> <value>: replace or append a key=value line.

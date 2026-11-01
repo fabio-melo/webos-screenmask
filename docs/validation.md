@@ -47,6 +47,8 @@ in compositor pixels (1920×1080).
 | Masks come back after a full reboot | Pass. Attached at 51.7 s of uptime, same compositor PID, `NRestarts=0`. |
 | Upgrade replaces the masks without stacking | **Failed, then fixed.** See [what failed](what-failed.md#5-during-validation-one-appid-for-every-build). After the fix, the ACK carried only the new build (14 of 15 reads; the other read hit the file mid-write). |
 | Uninstall hides the masks and removes every file | Pass. The masks left the screen, and no file, hook, link or unit was left. The ACK file reappears until reboot (expected). |
+| No-systemd fallback (2026-10-31) | Pass on the C1 with systemd turned off by force. The supervisor survived the end of the SSH session, a change was confirmed, a killed loader came back in 5 s, and uninstall stopped the supervisor. `tty-run` without `script` returned the `luna-send` output through Python. Not run yet on a TV without systemd. |
+| Systemd path after the fallback change | Pass on the C1. Install, attach of the new build, `add` and `on` confirmed. |
 | Windows installer (`screenmask-windows.cmd`) | Pass. Run on Windows against the test TV. The TV side was also tested from Linux with the same commands: chunked transfer, unpack, line-ending cleanup, file checksums. |
 
 ## Limits

@@ -118,12 +118,16 @@ the files. The hidden masks leave compositor memory at the next reboot.
 | TV | webOS | Status |
 |---|---|---|
 | LG OLED C1 | 6.4.0 (`Rockhopper release 6.4.0`) | Validated |
+| LG OLED C9 and other 2019 models | 4.5 | Experimental. The installer runs without systemd, but the masks are not confirmed yet. |
 | Other models and versions | — | Unknown. The installer warns and continues. |
 
 The method depends on internal webOS services (`systemUIManager/launch`, the
 `surface-manager` QML compositor). Other webOS versions may lack them or behave
 differently. If you test another model, open an issue with the result of
 `cat /etc/starfish-release` and `screenmask status`.
+
+Without systemd (older webOS), the loader runs under a small background
+supervisor. See [how it works](docs/how-it-works.md#without-systemd).
 
 ## Documentation
 

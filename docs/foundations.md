@@ -54,7 +54,9 @@ it survives by luck.
 `luna-send` calls webOS services. Two traps:
 
 1. It needs a terminal on stdin. With a pipe or `/dev/null` it runs, exits 0,
-   and prints nothing. Scripts wrap it with `script -q -c '…' /dev/null`.
+   and prints nothing. Scripts run it through `tty-run`, which uses
+   `script -q -c '…' /dev/null`. Without `script` it opens a pty with Python,
+   and with neither it runs the command as is.
 2. `"returnValue":true` means the service accepted the call. It does not mean
    the effect happened. Confirm the effect some other way. This project uses
    the ACK file.
